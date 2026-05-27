@@ -1360,7 +1360,10 @@
                 <td style="text-align:right" class="num">${fmtRp(o.other)}</td>
                 <td style="text-align:right;font-weight:600" class="num">${fmtRp((o.sewa||0)+(o.admin||0)+(o.other||0))}</td>
                 <td style="font-size:12px;color:var(--ink-mute)">${escapeHtml(o.note || '–')}</td>
-                <td style="text-align:right"><button class="btn btn-sm btn-danger" data-del-op="${o.id}">Hapus</button></td>
+                <td style="text-align:right;display:flex;gap:4px;justify-content:flex-end">
+                  <button class="btn btn-sm" data-edit-op="${o.id}">✎</button>
+                  <button class="btn btn-sm btn-danger" data-del-op="${o.id}">×</button>
+                </td>
               </tr>
             `).join('')}
           </tbody>
@@ -1382,6 +1385,12 @@
       await save('operations');
       renderPanel();
     };
+    p.querySelectorAll('[data-edit-op]').forEach(b => {
+      b.onclick = () => {
+        const op = state.operations.find(o => o.id === b.dataset.editOp);
+        if (op) openEditModal('operasi', op);
+      };
+    });
     p.querySelectorAll('[data-del-op]').forEach(b => {
       b.onclick = async () => {
         if (!confirm('Hapus operasi ini?')) return;
@@ -1704,7 +1713,10 @@
                 <td>${t.point === 'BTC' ? '<span class="badge badge-btc">BTC</span>' : t.point}</td>
                 <td style="text-align:right" class="num">${fmtRp(t.fare)}</td>
                 <td><span class="badge ${t.paid?'badge-paid':'badge-unpaid'}">${t.paid?'Lunas':'Belum'}</span></td>
-                <td style="text-align:right"><button class="btn btn-sm btn-danger" data-del-trip="${t.id}">×</button></td>
+                <td style="text-align:right;display:flex;gap:4px;justify-content:flex-end">
+                  <button class="btn btn-sm" data-edit-trip="${t.id}">✎</button>
+                  <button class="btn btn-sm btn-danger" data-del-trip="${t.id}">×</button>
+                </td>
               </tr>
             `).join('')}
           </tbody>
@@ -1720,6 +1732,12 @@
       state._tripStatusFilter = e.target.value;
       renderPanel();
     };
+    p.querySelectorAll('[data-edit-trip]').forEach(b => {
+      b.onclick = () => {
+        const trip = state.trips.find(t => t.id === b.dataset.editTrip);
+        if (trip) openEditModal('trip', trip);
+      };
+    });
     p.querySelectorAll('[data-del-trip]').forEach(b => {
       b.onclick = async () => {
         if (!confirm('Hapus trip ini?')) return;
@@ -1765,7 +1783,10 @@
               <tr>
                 <td><strong>${escapeHtml(m.official)}</strong></td>
                 <td style="font-size:12px;color:var(--ink-mute)">${(m.aliases || []).map(escapeHtml).join(', ') || '–'}</td>
-                <td style="text-align:right"><button class="btn btn-sm btn-danger" data-del-mn="${m.id}">Hapus</button></td>
+                <td style="text-align:right;display:flex;gap:4px;justify-content:flex-end">
+                  <button class="btn btn-sm" data-edit-mn="${m.id}">✎</button>
+                  <button class="btn btn-sm btn-danger" data-del-mn="${m.id}">×</button>
+                </td>
               </tr>
             `).join('')}
           </tbody>
@@ -1782,6 +1803,12 @@
       await save('masterNames');
       renderPanel();
     };
+    p.querySelectorAll('[data-edit-mn]').forEach(b => {
+      b.onclick = () => {
+        const mn = state.masterNames.find(m => m.id === b.dataset.editMn);
+        if (mn) openEditModal('masterName', mn);
+      };
+    });
     p.querySelectorAll('[data-del-mn]').forEach(b => {
       b.onclick = async () => {
         if (!confirm('Hapus nama ini?')) return;
@@ -1974,7 +2001,171 @@
     renderModal();
   }
 
-  // ===== Modal =====
+  // ===== Edit Modal =====
+  function openEditModal(type, item) {
+    if (type === 'operasi') {
+      state.modal = {
+        type: 'edit-operasi',
+        render: () => `
+          <h3>✎ Edit Operasi Harian</h3>
+          <div class="form-grid" style="margin-bottom:12px">
+            <div class="form-field">
+              <label>Tanggal</label>
+              <input type="date" id="e-date" value="${item.date}">
+            </div>
+            <div class="form-field">
+              <label>Sewa unit (Rp)</label>
+              <input type="number" id="e-sewa" value="${item.sewa || 0}">
+            </div>
+            <div class="form-field">
+              <label>Honor admin (Rp)</label>
+              <input type="number" id="e-admin" value="${item.admin || 0}">
+            </div>
+            <div class="form-field">
+              <label>Biaya lain (Rp)</label>
+              <input type="number" id="e-other" value="${item.other || 0}">
+            </div>
+          </div>
+          <div class="form-field" style="margin-bottom:16px">
+            <label>Catatan</label>
+            <input type="text" id="e-note" value="${escapeHtml(item.note || '')}">
+          </div>
+          <div class="modal-actions">
+            <button class="btn" id="e-cancel">Batal</button>
+            <button class="btn btn-primary" id="e-save">Simpan</button>
+          </div>
+        `,
+        wire: () => {
+          document.getElementById('e-cancel').onclick = () => { state.modal = null; render(); };
+          document.getElementById('e-save').onclick = async () => {
+            const idx = state.operations.findIndex(o => o.id === item.id);
+            if (idx === -1) return;
+            state.operations[idx] = {
+              ...item,
+              date:  document.getElementById('e-date').value,
+              sewa:  parseFloat(document.getElementById('e-sewa').value)  || 0,
+              admin: parseFloat(document.getElementById('e-admin').value) || 0,
+              other: parseFloat(document.getElementById('e-other').value) || 0,
+              note:  document.getElementById('e-note').value.trim()
+            };
+            await save('operations');
+            state.modal = null;
+            render();
+          };
+        }
+      };
+
+    } else if (type === 'trip') {
+      state.modal = {
+        type: 'edit-trip',
+        render: () => `
+          <h3>✎ Edit Trip</h3>
+          <div class="form-grid" style="margin-bottom:12px">
+            <div class="form-field">
+              <label>Tanggal</label>
+              <input type="date" id="e-date" value="${item.date}">
+            </div>
+            <div class="form-field">
+              <label>Nama</label>
+              <input type="text" id="e-name" value="${escapeHtml(item.name || '')}">
+            </div>
+            <div class="form-field">
+              <label>Status</label>
+              <select id="e-status">
+                <option value="PP"     ${item.status==='PP'    ?'selected':''}>PP</option>
+                <option value="SEKALI" ${item.status==='SEKALI'?'selected':''}>Sekali Jalan</option>
+                <option value="CANCEL" ${item.status==='CANCEL'?'selected':''}>Cancel</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Titik jemput</label>
+              <select id="e-point">
+                <option value="Default" ${item.point==='Default'?'selected':''}>Default</option>
+                <option value="BTC"     ${item.point==='BTC'   ?'selected':''}>BTC</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Tarif (Rp)</label>
+              <input type="number" id="e-fare" value="${item.fare || 0}">
+            </div>
+            <div class="form-field">
+              <label>Status bayar</label>
+              <select id="e-paid">
+                <option value="false" ${!item.paid?'selected':''}>Belum bayar</option>
+                <option value="true"  ${ item.paid?'selected':''}>Lunas</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-field" style="margin-bottom:16px">
+            <label>Tanggal bayar</label>
+            <input type="date" id="e-paiddate" value="${item.paidDate || ''}">
+          </div>
+          <div class="modal-actions">
+            <button class="btn" id="e-cancel">Batal</button>
+            <button class="btn btn-primary" id="e-save">Simpan</button>
+          </div>
+        `,
+        wire: () => {
+          document.getElementById('e-cancel').onclick = () => { state.modal = null; render(); };
+          document.getElementById('e-save').onclick = async () => {
+            const idx = state.trips.findIndex(t => t.id === item.id);
+            if (idx === -1) return;
+            const paid = document.getElementById('e-paid').value === 'true';
+            state.trips[idx] = {
+              ...item,
+              date:     document.getElementById('e-date').value,
+              name:     document.getElementById('e-name').value.trim(),
+              status:   document.getElementById('e-status').value,
+              point:    document.getElementById('e-point').value,
+              fare:     parseFloat(document.getElementById('e-fare').value) || 0,
+              paid,
+              paidDate: paid ? (document.getElementById('e-paiddate').value || new Date().toISOString().slice(0,10)) : ''
+            };
+            await save('trips');
+            state.modal = null;
+            render();
+          };
+        }
+      };
+
+    } else if (type === 'masterName') {
+      state.modal = {
+        type: 'edit-master',
+        render: () => `
+          <h3>✎ Edit Master Nama</h3>
+          <div class="form-field" style="margin-bottom:12px">
+            <label>Nama resmi</label>
+            <input type="text" id="e-official" value="${escapeHtml(item.official || '')}">
+          </div>
+          <div class="form-field" style="margin-bottom:16px">
+            <label>Alias (pisahkan koma)</label>
+            <input type="text" id="e-aliases" value="${escapeHtml((item.aliases || []).join(', '))}">
+          </div>
+          <div class="modal-actions">
+            <button class="btn" id="e-cancel">Batal</button>
+            <button class="btn btn-primary" id="e-save">Simpan</button>
+          </div>
+        `,
+        wire: () => {
+          document.getElementById('e-cancel').onclick = () => { state.modal = null; render(); };
+          document.getElementById('e-save').onclick = async () => {
+            const idx = state.masterNames.findIndex(m => m.id === item.id);
+            if (idx === -1) return;
+            state.masterNames[idx] = {
+              ...item,
+              official: document.getElementById('e-official').value.trim(),
+              aliases:  document.getElementById('e-aliases').value.split(',').map(s => s.trim()).filter(Boolean)
+            };
+            await save('masterNames');
+            state.modal = null;
+            render();
+          };
+        }
+      };
+    }
+
+    renderModal();
+  }
   function renderModal() {
     const root = document.getElementById('modal-root');
     if (!state.modal) { root.innerHTML = ''; return; }
