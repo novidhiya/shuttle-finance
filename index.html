@@ -536,7 +536,21 @@
       if (d.masterNames) state.masterNames = d.masterNames;
       if (d.archive) state.archive = d.archive;
       if (d.settings && typeof d.settings === 'object') {
-        state.settings = { ...DEFAULT_SETTINGS, ...d.settings };
+        // Merge dengan hati-hati: nilai dari Sheet selalu menang,
+        // termasuk angka 0 yang valid (jangan di-overwrite sama default)
+        const merged = { ...DEFAULT_SETTINGS };
+        Object.keys(d.settings).forEach(k => {
+          // Hanya skip kalau nilainya undefined/null, bukan 0 atau ''
+          if (d.settings[k] !== undefined && d.settings[k] !== null) {
+            merged[k] = d.settings[k];
+          }
+        });
+        // Preserve URL & autoSync dari device ini kalau Sheet ga punya
+        if (!merged.appsScriptUrl && state.settings.appsScriptUrl) {
+          merged.appsScriptUrl = state.settings.appsScriptUrl;
+        }
+        if (merged.autoSync === undefined) merged.autoSync = true;
+        state.settings = merged;
       }
 
       // Save semua ke localStorage juga
