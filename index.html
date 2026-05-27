@@ -1671,67 +1671,173 @@
 
   // ===== Riwayat trip =====
   function renderHistory(p) {
-    const search = state._tripSearch || '';
-    const statusFilter = state._tripStatusFilter || 'ALL';
-    let trips = [...state.trips].sort((a, b) => b.date.localeCompare(a.date));
+    const search       = state._tripSearch        || '';
+    const statusFilter = state._tripStatusFilter  || 'ALL';
+    const bayarFilter  = state._tripBayarFilter   || 'ALL';
+    const sortBy       = state._tripSort          || 'date-desc';
+    const dateFrom     = state._tripDateFrom      || '';
+    const dateTo       = state._tripDateTo        || '';
+
+    let trips = [...state.trips];
+
+    // Filter nama
     if (search) trips = trips.filter(t => t.name.toLowerCase().includes(search.toLowerCase()));
+    // Filter status
     if (statusFilter !== 'ALL') trips = trips.filter(t => t.status === statusFilter);
+    // Filter bayar
+    if (bayarFilter === 'LUNAS')  trips = trips.filter(t =>  t.paid);
+    if (bayarFilter === 'BELUM')  trips = trips.filter(t => !t.paid);
+    // Filter tanggal
+    if (dateFrom) trips = trips.filter(t => t.date >= dateFrom);
+    if (dateTo)   trips = trips.filter(t => t.date <= dateTo);
+
+    // Sort
+    trips.sort((a, b) => {
+      if (sortBy === 'date-desc')  return b.date.localeCompare(a.date);
+      if (sortBy === 'date-asc')   return a.date.localeCompare(b.date);
+      if (sortBy === 'name-asc')   return a.name.localeCompare(b.name);
+      if (sortBy === 'name-desc')  return b.name.localeCompare(a.name);
+      if (sortBy === 'fare-desc')  return b.fare - a.fare;
+      if (sortBy === 'fare-asc')   return a.fare - b.fare;
+      return 0;
+    });
+
+    const totalFare    = trips.reduce((s, t) => s + t.fare, 0);
+    const totalUnpaid  = trips.filter(t => !t.paid).reduce((s, t) => s + t.fare, 0);
+    const hasFilter    = search || statusFilter !== 'ALL' || bayarFilter !== 'ALL' || dateFrom || dateTo;
+
+    // Shortcut bulan
+    const now = new Date();
+    const thisMonth  = now.toISOString().slice(0, 7);
+    const lastMonth  = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().slice(0, 7);
 
     p.innerHTML = `
-      <div class="filter-bar">
-        <input type="text" placeholder="🔍 Cari nama..." id="search-trip" value="${escapeHtml(search)}" style="flex:1;min-width:150px">
-        <select id="filter-status">
-          <option value="ALL" ${statusFilter==='ALL'?'selected':''}>Semua status</option>
-          <option value="PP" ${statusFilter==='PP'?'selected':''}>PP</option>
-          <option value="SEKALI" ${statusFilter==='SEKALI'?'selected':''}>Sekali</option>
-          <option value="CANCEL" ${statusFilter==='CANCEL'?'selected':''}>Cancel</option>
-        </select>
+      <div class="card" style="padding:14px;margin-bottom:14px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+          <strong style="font-size:13px;color:var(--ink-soft)">Filter:</strong>
+          <input type="text" placeholder="🔍 Nama..." id="search-trip"
+            value="${escapeHtml(search)}" style="flex:1;min-width:120px;border:1px solid var(--line-strong);border-radius:8px;padding:7px 10px;font-size:13px;font-family:inherit">
+          <select id="filter-status" style="border:1px solid var(--line-strong);border-radius:8px;padding:7px 10px;font-size:13px;font-family:inherit">
+            <option value="ALL"    ${statusFilter==='ALL'   ?'selected':''}>Semua status</option>
+            <option value="PP"     ${statusFilter==='PP'    ?'selected':''}>PP</option>
+            <option value="SEKALI" ${statusFilter==='SEKALI'?'selected':''}>Sekali</option>
+            <option value="CANCEL" ${statusFilter==='CANCEL'?'selected':''}>Cancel</option>
+          </select>
+          <select id="filter-bayar" style="border:1px solid var(--line-strong);border-radius:8px;padding:7px 10px;font-size:13px;font-family:inherit">
+            <option value="ALL"   ${bayarFilter==='ALL'  ?'selected':''}>Semua bayar</option>
+            <option value="LUNAS" ${bayarFilter==='LUNAS'?'selected':''}>Lunas</option>
+            <option value="BELUM" ${bayarFilter==='BELUM'?'selected':''}>Belum bayar</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <strong style="font-size:13px;color:var(--ink-soft)">Tanggal:</strong>
+          <input type="date" id="date-from" value="${dateFrom}"
+            style="border:1px solid var(--line-strong);border-radius:8px;padding:7px 10px;font-size:13px;font-family:inherit">
+          <span style="font-size:13px;color:var(--ink-mute)">s/d</span>
+          <input type="date" id="date-to" value="${dateTo}"
+            style="border:1px solid var(--line-strong);border-radius:8px;padding:7px 10px;font-size:13px;font-family:inherit">
+          <button class="btn btn-sm" id="shortcut-this-month">Bulan ini</button>
+          <button class="btn btn-sm" id="shortcut-last-month">Bulan lalu</button>
+          <button class="btn btn-sm" id="shortcut-all">Semua</button>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px">
+          <strong style="font-size:13px;color:var(--ink-soft)">Urutkan:</strong>
+          <select id="sort-by" style="border:1px solid var(--line-strong);border-radius:8px;padding:7px 10px;font-size:13px;font-family:inherit">
+            <option value="date-desc"  ${sortBy==='date-desc' ?'selected':''}>Tanggal terbaru</option>
+            <option value="date-asc"   ${sortBy==='date-asc'  ?'selected':''}>Tanggal terlama</option>
+            <option value="name-asc"   ${sortBy==='name-asc'  ?'selected':''}>Nama A–Z</option>
+            <option value="name-desc"  ${sortBy==='name-desc' ?'selected':''}>Nama Z–A</option>
+            <option value="fare-desc"  ${sortBy==='fare-desc' ?'selected':''}>Tarif terbesar</option>
+            <option value="fare-asc"   ${sortBy==='fare-asc'  ?'selected':''}>Tarif terkecil</option>
+          </select>
+          ${hasFilter ? `<button class="btn btn-sm btn-danger" id="btn-clear-filter">✕ Reset filter</button>` : ''}
+        </div>
       </div>
 
-      <h3 class="section-title">Semua trip (${trips.length})</h3>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <h3 class="section-title" style="margin:0">
+          ${trips.length} trip${hasFilter ? ' (difilter dari ' + state.trips.length + ')' : ''}
+        </h3>
+        <div style="display:flex;gap:12px;font-size:12px;color:var(--ink-soft)">
+          <span>Total: <strong class="num">${fmtRp(totalFare)}</strong></span>
+          ${totalUnpaid > 0 ? `<span style="color:var(--amber)">Belum lunas: <strong class="num">${fmtRp(totalUnpaid)}</strong></span>` : ''}
+        </div>
+      </div>
+
       ${trips.length === 0 ? `
-        <div class="empty-state"><div class="empty-state-icon">📋</div>Belum ada trip</div>
+        <div class="empty-state">
+          <div class="empty-state-icon">📋</div>
+          ${hasFilter ? 'Tidak ada data yang cocok dengan filter' : 'Belum ada trip'}
+        </div>
       ` : `
-        <table>
-          <thead>
-            <tr>
-              <th>Tanggal</th>
-              <th>Nama</th>
-              <th>Status</th>
-              <th>Titik</th>
-              <th style="text-align:right">Tarif</th>
-              <th>Bayar</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            ${trips.map(t => `
+        <div style="overflow-x:auto">
+          <table>
+            <thead>
               <tr>
-                <td>${fmtDate(t.date)}</td>
-                <td><strong>${escapeHtml(t.name)}</strong></td>
-                <td><span class="badge badge-${t.status.toLowerCase()}">${t.status}</span></td>
-                <td>${t.point === 'BTC' ? '<span class="badge badge-btc">BTC</span>' : t.point}</td>
-                <td style="text-align:right" class="num">${fmtRp(t.fare)}</td>
-                <td><span class="badge ${t.paid?'badge-paid':'badge-unpaid'}">${t.paid?'Lunas':'Belum'}</span></td>
-                <td style="text-align:right;display:flex;gap:4px;justify-content:flex-end">
-                  <button class="btn btn-sm" data-edit-trip="${t.id}">✎</button>
-                  <button class="btn btn-sm btn-danger" data-del-trip="${t.id}">×</button>
-                </td>
+                <th>Tanggal</th>
+                <th>Nama</th>
+                <th>Status</th>
+                <th>Titik</th>
+                <th style="text-align:right">Tarif</th>
+                <th>Bayar</th>
+                <th></th>
               </tr>
-            `).join('')}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              ${trips.map(t => `
+                <tr>
+                  <td style="white-space:nowrap">${fmtDate(t.date)}</td>
+                  <td><strong>${escapeHtml(t.name)}</strong></td>
+                  <td><span class="badge badge-${t.status.toLowerCase()}">${t.status}</span></td>
+                  <td>${t.point === 'BTC' ? '<span class="badge badge-btc">BTC</span>' : t.point}</td>
+                  <td style="text-align:right" class="num">${fmtRp(t.fare)}</td>
+                  <td><span class="badge ${t.paid?'badge-paid':'badge-unpaid'}">${t.paid?'Lunas':'Belum'}</span></td>
+                  <td style="text-align:right;display:flex;gap:4px;justify-content:flex-end">
+                    <button class="btn btn-sm" data-edit-trip="${t.id}">✎</button>
+                    <button class="btn btn-sm btn-danger" data-del-trip="${t.id}">×</button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
       `}
     `;
 
-    document.getElementById('search-trip').oninput = (e) => {
-      state._tripSearch = e.target.value;
+    // Wire filters
+    document.getElementById('search-trip').oninput = (e) => { state._tripSearch = e.target.value; renderPanel(); };
+    document.getElementById('filter-status').onchange = (e) => { state._tripStatusFilter = e.target.value; renderPanel(); };
+    document.getElementById('filter-bayar').onchange  = (e) => { state._tripBayarFilter  = e.target.value; renderPanel(); };
+    document.getElementById('date-from').onchange = (e) => { state._tripDateFrom = e.target.value; renderPanel(); };
+    document.getElementById('date-to').onchange   = (e) => { state._tripDateTo   = e.target.value; renderPanel(); };
+    document.getElementById('sort-by').onchange   = (e) => { state._tripSort     = e.target.value; renderPanel(); };
+
+    // Shortcut tanggal
+    document.getElementById('shortcut-this-month').onclick = () => {
+      const y = now.getFullYear(), m = now.getMonth();
+      state._tripDateFrom = new Date(y, m, 1).toISOString().slice(0, 10);
+      state._tripDateTo   = new Date(y, m + 1, 0).toISOString().slice(0, 10);
       renderPanel();
     };
-    document.getElementById('filter-status').onchange = (e) => {
-      state._tripStatusFilter = e.target.value;
+    document.getElementById('shortcut-last-month').onclick = () => {
+      const y = now.getFullYear(), m = now.getMonth();
+      state._tripDateFrom = new Date(y, m - 1, 1).toISOString().slice(0, 10);
+      state._tripDateTo   = new Date(y, m, 0).toISOString().slice(0, 10);
       renderPanel();
     };
+    document.getElementById('shortcut-all').onclick = () => {
+      state._tripDateFrom = ''; state._tripDateTo = '';
+      renderPanel();
+    };
+    const clearBtn = document.getElementById('btn-clear-filter');
+    if (clearBtn) clearBtn.onclick = () => {
+      state._tripSearch = ''; state._tripStatusFilter = 'ALL';
+      state._tripBayarFilter = 'ALL'; state._tripSort = 'date-desc';
+      state._tripDateFrom = ''; state._tripDateTo = '';
+      renderPanel();
+    };
+
+    // Edit & delete
     p.querySelectorAll('[data-edit-trip]').forEach(b => {
       b.onclick = () => {
         const trip = state.trips.find(t => t.id === b.dataset.editTrip);
