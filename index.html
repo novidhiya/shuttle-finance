@@ -403,9 +403,10 @@
     routeName: 'Bandung (ITB) ↔ Cikarang (ITSB)',
     saldo: 0,
     saldoAwal: 0,
-    saldoTitikNol: 2554500,       // saldo terverifikasi pada tanggal titik nol
+    saldoTitikNol: 4064500,       // saldo terverifikasi pada tanggal titik nol
     saldoTitikNolDate: '2026-04-24', // tanggal titik nol saldo
     piutangPraTitikNol: 5920000,     // piutang sebelum titik nol (misal Pak Heru)
+    honorAdminDiambil: 0,            // total honor admin yang sudah benar-benar diambil cash
     appsScriptUrl: '',  // URL ke Google Apps Script web app
     autoSync: true,      // auto sync setelah setiap perubahan
     tarifHistory: [
@@ -699,6 +700,17 @@
   }
 
   // ===== Saldo & Weekly Calculations =====
+
+  // Hitung total honor admin yang sudah dicatat di operations (tapi belum tentu diambil)
+  // Ini adalah "hutang sistem ke admin" sejak tanggal mulai operasi pertama
+  function getHonorAdminTerutang() {
+    // Total honor admin yang tercatat di semua operasi (keseluruhan, bukan dari titik nol)
+    const totalTercatat = state.operations
+      .reduce((s, o) => s + (o.admin || 0), 0);
+    // Yang sudah diambil: disimpan manual di settings
+    const sudahDiambil = state.settings.honorAdminDiambil || 0;
+    return totalTercatat - sudahDiambil;
+  }
 
   // Hitung saldo kumulatif dari titik nol
   function getSaldoKumulatif(upToDate) {
@@ -1097,9 +1109,12 @@
     const nilaiTitikNol = state.settings.saldoTitikNol || 0;
     const saldoNow      = getSaldoKumulatif(today);
     const proyeksiNow   = getSaldoProyeksi(today);
-    const piutangPost   = state.trips.filter(t => !t.paid && t.date >= titikNol).reduce((s,t) => s + (t.fare||0), 0);
-    const piutangPre    = state.settings.piutangPraTitikNol || 0;
-    const totalPiutang  = piutangPost + piutangPre;
+    const piutangPost      = state.trips.filter(t => !t.paid && t.date >= titikNol).reduce((s,t) => s + (t.fare||0), 0);
+    const piutangPre       = state.settings.piutangPraTitikNol || 0;
+    const totalPiutang     = piutangPost + piutangPre;
+    const honorTerutang    = getHonorAdminTerutang();
+    // Saldo "real" di rekening = saldo sistem + honor yang belum diambil (karena belum keluar cash)
+    const saldoRekening    = saldoNow + honorTerutang;
 
     if (weeks.length === 0) return '';
 
@@ -1110,11 +1125,16 @@
           Titik nol: <strong>${fmtRp(nilaiTitikNol)}</strong> per ${fmtDate(titikNol)} · Hanya trip paid & ops sesudahnya yang dihitung
         </div>
 
-        <div class="stats-grid" style="margin-bottom:16px">
+        <div class="stats-grid" style="margin-bottom:12px">
           <div class="stat-card" style="background:var(--brand-soft);border-color:#c5e4d6">
-            <div class="stat-label" style="color:var(--brand-dark)">Saldo kas sekarang</div>
+            <div class="stat-label" style="color:var(--brand-dark)">Saldo akuntansi</div>
             <div class="stat-value ${saldoNow >= 0 ? 'stat-positive' : 'stat-negative'}" style="color:var(--brand-dark)">${fmtRp(saldoNow)}</div>
-            <div class="stat-sub" style="color:var(--brand)">Titik nol + kas masuk − pengeluaran</div>
+            <div class="stat-sub" style="color:var(--brand)">Titik nol + kas masuk − semua ops</div>
+          </div>
+          <div class="stat-card" style="background:#f0faf5;border-color:#a8d9c0">
+            <div class="stat-label" style="color:#1a6644">Estimasi saldo rekening</div>
+            <div class="stat-value ${saldoRekening >= 0 ? 'stat-positive' : 'stat-negative'}" style="color:#1a6644">${fmtRp(saldoRekening)}</div>
+            <div class="stat-sub" style="color:#1a6644">+honor belum diambil ${fmtRp(honorTerutang)}</div>
           </div>
           <div class="stat-card" style="background:var(--blue-soft);border-color:#b8d6ed">
             <div class="stat-label" style="color:var(--blue)">Proyeksi jika semua lunas</div>
@@ -1123,10 +1143,17 @@
           </div>
         </div>
 
+        <div style="background:var(--amber-soft);border:1px solid #f0d4a3;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div>
+            <span style="color:var(--amber);font-weight:600">🏦 Honor admin belum diambil: ${fmtRp(honorTerutang)}</span>
+            <span style="color:var(--ink-mute);margin-left:8px">· uang ini masih ada di rekening, belum jadi pengeluaran cash</span>
+          </div>
+        </div>
+
         ${piutangPre > 0 ? `
-        <div style="background:var(--amber-soft);border:1px solid #f0d4a3;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px">
-          <span style="color:var(--amber);font-weight:600">⚠️ Piutang pra-titik nol: ${fmtRp(piutangPre)}</span>
-          <span style="color:var(--ink-mute);margin-left:8px">· hutang sebelum ${fmtDate(titikNol)} (tidak masuk saldo kas, hanya proyeksi)</span>
+        <div style="background:var(--danger-soft);border:1px solid #e8b4c0;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px">
+          <span style="color:var(--danger);font-weight:600">⚠️ Piutang pra-titik nol: ${fmtRp(piutangPre)}</span>
+          <span style="color:var(--ink-mute);margin-left:8px">· hutang sebelum ${fmtDate(titikNol)} (tidak masuk saldo, hanya proyeksi)</span>
         </div>
         ` : ''}
 
@@ -2380,6 +2407,11 @@
             <input type="number" id="s-piutang-pre" value="${s.piutangPraTitikNol || 0}">
             <div style="font-size:11px;color:var(--ink-mute);margin-top:4px">Hutang dosen sebelum titik nol (misal Pak Heru). Masuk proyeksi, tidak masuk saldo kas.</div>
           </div>
+          <div class="form-field">
+            <label>Honor admin sudah diambil (Rp)</label>
+            <input type="number" id="s-honor-diambil" value="${s.honorAdminDiambil || 0}">
+            <div style="font-size:11px;color:var(--ink-mute);margin-top:4px">Total honor admin yang sudah benar-benar diambil cash dari rekening. Update ini saat kamu ambil honor.</div>
+          </div>
         </div>
         <button class="btn btn-primary" id="btn-save-titik-nol">Simpan titik nol</button>
       </div>
@@ -2490,11 +2522,13 @@
     document.getElementById('btn-save-titik-nol').onclick = async () => {
       const tglVal      = document.getElementById('s-titik-nol-date').value;
       const nilaiVal    = parseFloat(document.getElementById('s-titik-nol-nilai').value) || 0;
-      const piutangPreVal = parseFloat(document.getElementById('s-piutang-pre').value) || 0;
+      const piutangPreVal    = parseFloat(document.getElementById('s-piutang-pre').value) || 0;
+      const honorDiambilVal  = parseFloat(document.getElementById('s-honor-diambil').value) || 0;
       if (!tglVal) { alert('Tanggal titik nol harus diisi'); return; }
       state.settings.saldoTitikNolDate    = tglVal;
       state.settings.saldoTitikNol        = nilaiVal;
       state.settings.piutangPraTitikNol   = piutangPreVal;
+      state.settings.honorAdminDiambil    = honorDiambilVal;
       await save('settings');
       alert('✓ Titik nol saldo disimpan');
       render();
