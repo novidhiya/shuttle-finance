@@ -576,6 +576,16 @@
           merged.appsScriptUrl = state.settings.appsScriptUrl;
         }
         if (merged.autoSync === undefined) merged.autoSync = true;
+        // Preserve tarifHistory: Sheet mungkin tidak bisa simpan array dengan benar.
+        // Pakai tarifHistory dari localStorage (state saat ini) kalau lebih lengkap.
+        const sheetHistory = Array.isArray(merged.tarifHistory) ? merged.tarifHistory : [];
+        const localHistory = Array.isArray(state.settings.tarifHistory) ? state.settings.tarifHistory : [];
+        const defaultHistory = DEFAULT_SETTINGS.tarifHistory || [];
+        if (sheetHistory.length === 0 && localHistory.length > 0) {
+          merged.tarifHistory = localHistory;
+        } else if (sheetHistory.length === 0 && localHistory.length === 0) {
+          merged.tarifHistory = defaultHistory;
+        }
         state.settings = merged;
       }
 
@@ -1135,10 +1145,12 @@
         el.oninput = (e) => {
           it[prop] = isNum ? (parseFloat(e.target.value) || 0) : e.target.value;
           if (prop === 'status') {
+            // Pakai tarif sesuai tanggal trip, bukan tarif global saat ini
+            const t = getTarifForDate(it.date);
             it.fare = {
-              PP: state.settings.tarifPP,
-              SEKALI: state.settings.tarifSekali,
-              CANCEL: state.settings.tarifCancel
+              PP: t.tarifPP,
+              SEKALI: t.tarifSekali,
+              CANCEL: t.tarifCancel
             }[it.status];
             renderPreview();
           }
