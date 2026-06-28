@@ -403,6 +403,8 @@
     routeName: 'Bandung (ITB) ↔ Cikarang (ITSB)',
     saldo: 0,
     saldoAwal: 0,
+    saldoTitikNol: 2554500,       // saldo terverifikasi pada tanggal titik nol
+    saldoTitikNolDate: '2026-04-24', // tanggal titik nol saldo
     appsScriptUrl: '',  // URL ke Google Apps Script web app
     autoSync: true,      // auto sync setelah setiap perubahan
     tarifHistory: [
@@ -695,6 +697,109 @@
     return `${y}-${m}-${day}`;
   }
 
+  // ===== Saldo & Weekly Calculations =====
+
+  // Hitung saldo kumulatif dari titik nol
+  function getSaldoKumulatif(upToDate) {
+    const titikNol    = state.settings.saldoTitikNolDate || '2026-04-24';
+    const nilaiTitikNol = state.settings.saldoTitikNol || 0;
+
+    // Pemasukan: hanya trip yang SUDAH DIBAYAR (paid=true) sejak titik nol
+    const paidIncome = state.trips
+      .filter(t => t.paid && t.paidDate >= titikNol && t.paidDate <= upToDate)
+      .reduce((s, t) => s + (t.fare || 0), 0);
+
+    // Pengeluaran: semua ops sejak titik nol s/d upToDate
+    const expense = state.operations
+      .filter(o => o.date >= titikNol && o.date <= upToDate)
+      .reduce((s, o) => s + (o.sewa || 0) + (o.admin || 0) + (o.other || 0), 0);
+
+    return nilaiTitikNol + paidIncome - expense;
+  }
+
+  // Hitung proyeksi: saldo + semua piutang belum bayar
+  function getSaldoProyeksi(upToDate) {
+    const titikNol = state.settings.saldoTitikNolDate || '2026-04-24';
+    const piutang  = state.trips
+      .filter(t => !t.paid && t.date >= titikNol && t.date <= upToDate)
+      .reduce((s, t) => s + (t.fare || 0), 0);
+    return getSaldoKumulatif(upToDate) + piutang;
+  }
+
+  // Ambil Jumat dari minggu ISO (Senin–Jumat)
+  function getWeekBounds(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    const dow = d.getDay(); // 0=Min, 1=Sen, ..., 5=Jum, 6=Sab
+    // Senin sebelumnya
+    const diffToMon = (dow === 0) ? -6 : 1 - dow;
+    const mon = new Date(d); mon.setDate(d.getDate() + diffToMon);
+    // Jumat
+    const fri = new Date(mon); fri.setDate(mon.getDate() + 4);
+    const fmt = (dt) => {
+      const y = dt.getFullYear();
+      const m = String(dt.getMonth() + 1).padStart(2, '0');
+      const day = String(dt.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+    return { start: fmt(mon), end: fmt(fri) };
+  }
+
+  // Generate data per minggu dari titik nol hingga hari ini
+  function getWeeklyRows(nWeeks) {
+    const titikNol = state.settings.saldoTitikNolDate || '2026-04-24';
+    const today    = todayISO();
+
+    // Kumpulkan semua minggu unik yang ada data, dari titik nol ke depan
+    const allDates = [
+      ...state.trips.filter(t => t.date >= titikNol).map(t => t.date),
+      ...state.operations.filter(o => o.date >= titikNol).map(o => o.date)
+    ];
+    // Tambah today supaya minggu aktif selalu muncul
+    allDates.push(today);
+
+    const weekKeys = new Set();
+    allDates.forEach(d => {
+      const { start } = getWeekBounds(d);
+      weekKeys.add(start);
+    });
+
+    const weeks = [...weekKeys].sort().slice(-(nWeeks || 10));
+
+    return weeks.map(monDate => {
+      const { start, end } = getWeekBounds(monDate);
+      const endCapped = end > today ? today : end; // jangan melewati hari ini
+
+      // Trip minggu ini
+      const weekTrips = state.trips.filter(t => t.date >= start && t.date <= end);
+      // Pembayaran masuk minggu ini (berdasarkan paidDate)
+      const paidInWeek = state.trips
+        .filter(t => t.paid && t.paidDate >= start && t.paidDate <= end)
+        .reduce((s, t) => s + (t.fare || 0), 0);
+      // Piutang baru minggu ini
+      const piutangWeek = weekTrips
+        .filter(t => !t.paid)
+        .reduce((s, t) => s + (t.fare || 0), 0);
+      // Pengeluaran ops minggu ini
+      const expenseWeek = state.operations
+        .filter(o => o.date >= start && o.date <= end)
+        .reduce((s, o) => s + (o.sewa || 0) + (o.admin || 0) + (o.other || 0), 0);
+
+      // Saldo kumulatif di akhir Jumat minggu ini
+      const saldoAkhirMinggu = getSaldoKumulatif(end > today ? today : end);
+      const proyeksiAkhir    = getSaldoProyeksi(end > today ? today : end);
+
+      // Label minggu
+      const fmtShort = (iso) => {
+        const [y, m, d] = iso.split('-');
+        return `${parseInt(d)}/${parseInt(m)}`;
+      };
+      const label = `${fmtShort(start)} – ${fmtShort(end)}`;
+      const isCurrentWeek = today >= start && today <= end;
+
+      return { start, end, label, isCurrentWeek, paidInWeek, piutangWeek, expenseWeek, saldoAkhirMinggu, proyeksiAkhir, tripCount: weekTrips.length };
+    });
+  }
+
   // ===== Parser =====
   function normalizeName(raw) {
     return String(raw || '')
@@ -964,6 +1069,8 @@
           <span class="breakdown-value ${allTimeIncome - allTimeExpense >= 0 ? 'stat-positive' : 'stat-negative'}" style="font-weight:600">${fmtRp(allTimeIncome - allTimeExpense)}</span>
         </div>
       </div>
+
+      ${renderWeeklySaldoTable()}
     `;
 
     document.getElementById('prev-month').onclick = () => {
@@ -978,6 +1085,75 @@
     };
 
     drawTrendChart();
+  }
+
+  function renderWeeklySaldoTable() {
+    const weeks      = getWeeklyRows(10);
+    const today      = todayISO();
+    const titikNol   = state.settings.saldoTitikNolDate || '2026-04-24';
+    const nilaiTitikNol = state.settings.saldoTitikNol || 0;
+    const saldoNow   = getSaldoKumulatif(today);
+    const proyeksiNow = getSaldoProyeksi(today);
+    const totalPiutang = state.trips.filter(t => !t.paid && t.date >= titikNol).reduce((s,t) => s + (t.fare||0), 0);
+
+    if (weeks.length === 0) return '';
+
+    return `
+      <div class="card" style="border-color: var(--brand);">
+        <h3 class="section-title" style="color:var(--brand-dark)">💰 Saldo & Proyeksi</h3>
+        <div style="font-size:11px;color:var(--ink-mute);margin-bottom:14px">
+          Titik nol: <strong>${fmtRp(nilaiTitikNol)}</strong> per ${fmtDate(titikNol)} · Hanya trip paid & ops sesudahnya yang dihitung
+        </div>
+
+        <div class="stats-grid" style="margin-bottom:16px">
+          <div class="stat-card" style="background:var(--brand-soft);border-color:#c5e4d6">
+            <div class="stat-label" style="color:var(--brand-dark)">Saldo kas sekarang</div>
+            <div class="stat-value ${saldoNow >= 0 ? 'stat-positive' : 'stat-negative'}" style="color:var(--brand-dark)">${fmtRp(saldoNow)}</div>
+            <div class="stat-sub" style="color:var(--brand)">Uang masuk dikurangi semua ops</div>
+          </div>
+          <div class="stat-card" style="background:var(--blue-soft);border-color:#b8d6ed">
+            <div class="stat-label" style="color:var(--blue)">Proyeksi jika semua lunas</div>
+            <div class="stat-value" style="color:var(--blue)">${fmtRp(proyeksiNow)}</div>
+            <div class="stat-sub" style="color:var(--blue)">+piutang Rp ${fmtRp(totalPiutang)}</div>
+          </div>
+        </div>
+
+        <div style="font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">
+          Rincian per minggu (Senin–Jumat)
+        </div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead>
+              <tr>
+                <th>Minggu</th>
+                <th style="text-align:right">Kas masuk</th>
+                <th style="text-align:right">Piutang baru</th>
+                <th style="text-align:right">Pengeluaran</th>
+                <th style="text-align:right;background:var(--brand-soft);color:var(--brand-dark)">Saldo akhir</th>
+                <th style="text-align:right;background:var(--blue-soft);color:var(--blue)">Proyeksi</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${weeks.map(w => `
+                <tr style="${w.isCurrentWeek ? 'background:var(--brand-soft);font-weight:600' : ''}">
+                  <td style="white-space:nowrap">
+                    ${w.label}
+                    ${w.isCurrentWeek ? '<span style="font-size:10px;background:var(--brand);color:#fff;padding:1px 5px;border-radius:4px;margin-left:4px">skrg</span>' : ''}
+                  </td>
+                  <td style="text-align:right" class="num ${w.paidInWeek > 0 ? 'stat-positive' : ''}">${w.paidInWeek > 0 ? fmtRp(w.paidInWeek) : '–'}</td>
+                  <td style="text-align:right;color:var(--amber)" class="num">${w.piutangWeek > 0 ? fmtRp(w.piutangWeek) : '–'}</td>
+                  <td style="text-align:right" class="num ${w.expenseWeek > 0 ? 'stat-negative' : ''}">${w.expenseWeek > 0 ? fmtRp(w.expenseWeek) : '–'}</td>
+                  <td style="text-align:right;background:var(--brand-soft)" class="num">
+                    <strong style="color:${w.saldoAkhirMinggu >= 0 ? 'var(--brand-dark)' : 'var(--danger)'}">${fmtRp(w.saldoAkhirMinggu)}</strong>
+                  </td>
+                  <td style="text-align:right;background:var(--blue-soft);color:var(--blue)" class="num">${fmtRp(w.proyeksiAkhir)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
   }
 
   function renderBreakdown(md) {
@@ -1527,6 +1703,16 @@
     const saldoAwal = state.settings.saldoAwal || 0;
     const saldoAkhir = saldoAwal + data.profit;
 
+    // Saldo kumulatif sistem berdasarkan titik nol
+    const titikNol = state.settings.saldoTitikNolDate || '2026-04-24';
+    const today    = todayISO();
+    const periodeEnd = end > today ? today : end;
+    const saldoSistemAkhir  = getSaldoKumulatif(periodeEnd);
+    const proyeksiPeriode   = getSaldoProyeksi(periodeEnd);
+    const piutangPeriode    = state.trips
+      .filter(t => !t.paid && t.date >= titikNol && t.date <= periodeEnd)
+      .reduce((s, t) => s + (t.fare || 0), 0);
+
     p.innerHTML = `
       <div class="card">
         <h3 class="section-title">📅 Pilih periode laporan</h3>
@@ -1570,6 +1756,34 @@
           <div class="stat-sub" style="color: var(--brand-dark);">Profit: ${fmtRp(data.profit)}</div>
         </div>
       </div>
+
+      <!-- Saldo Kumulatif Section -->
+      ${start >= titikNol ? `
+      <div class="card" style="border-color:var(--brand)">
+        <h3 class="section-title" style="color:var(--brand-dark)">💰 Saldo Kumulatif (sejak ${fmtDate(titikNol)})</h3>
+        <div class="stats-grid" style="margin-bottom:0">
+          <div class="stat-card" style="background:var(--brand-soft);border-color:#c5e4d6">
+            <div class="stat-label" style="color:var(--brand-dark)">Saldo kas per akhir periode</div>
+            <div class="stat-value ${saldoSistemAkhir >= 0 ? 'stat-positive' : 'stat-negative'}" style="color:var(--brand-dark)">${fmtRp(saldoSistemAkhir)}</div>
+            <div class="stat-sub" style="color:var(--brand)">Titik nol + kas masuk − ops</div>
+          </div>
+          <div class="stat-card" style="background:var(--amber-soft);border-color:#f0d4a3">
+            <div class="stat-label" style="color:var(--amber)">Piutang belum lunas</div>
+            <div class="stat-value" style="color:var(--amber)">${fmtRp(piutangPeriode)}</div>
+            <div class="stat-sub" style="color:var(--amber)">Trip s/d akhir periode</div>
+          </div>
+          <div class="stat-card" style="background:var(--blue-soft);border-color:#b8d6ed">
+            <div class="stat-label" style="color:var(--blue)">Proyeksi jika semua lunas</div>
+            <div class="stat-value" style="color:var(--blue)">${fmtRp(proyeksiPeriode)}</div>
+            <div class="stat-sub" style="color:var(--blue)">Saldo kas + piutang</div>
+          </div>
+        </div>
+      </div>
+      ` : `
+      <div class="alert alert-warn">
+        ⚠️ Periode ini sebagian sebelum titik nol (${fmtDate(titikNol)}). Saldo kumulatif hanya dihitung dari titik nol ke depan.
+      </div>
+      `}
 
       <div class="card">
         <h3 class="section-title">Detail per hari (${data.days.length} hari ber-aktivitas)</h3>
@@ -2134,6 +2348,25 @@
         <button class="btn btn-primary" id="btn-save-settings">Simpan pengaturan</button>
       </div>
 
+      <div class="card" style="border-color:var(--brand)">
+        <h3 class="section-title" style="color:var(--brand-dark)">💰 Titik Nol Saldo</h3>
+        <div style="font-size:12px;color:var(--ink-soft);margin-bottom:14px">
+          Saldo yang terverifikasi pada tanggal tertentu sebagai basis kalkulasi saldo mingguan.
+          Data sebelum tanggal ini diabaikan dari perhitungan saldo.
+        </div>
+        <div class="form-grid">
+          <div class="form-field">
+            <label>Tanggal titik nol</label>
+            <input type="date" id="s-titik-nol-date" value="${s.saldoTitikNolDate || '2026-04-24'}">
+          </div>
+          <div class="form-field">
+            <label>Nilai saldo titik nol (Rp)</label>
+            <input type="number" id="s-titik-nol-nilai" value="${s.saldoTitikNol || 0}">
+          </div>
+        </div>
+        <button class="btn btn-primary" id="btn-save-titik-nol">Simpan titik nol</button>
+      </div>
+
       <div class="card" style="border-color: var(--danger)">
         <h3 class="section-title" style="color: var(--danger)">⚠️ Zona berbahaya</h3>
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -2237,6 +2470,17 @@
         renderPanel();
       };
     });
+    document.getElementById('btn-save-titik-nol').onclick = async () => {
+      const tglVal  = document.getElementById('s-titik-nol-date').value;
+      const nilaiVal = parseFloat(document.getElementById('s-titik-nol-nilai').value) || 0;
+      if (!tglVal) { alert('Tanggal titik nol harus diisi'); return; }
+      state.settings.saldoTitikNolDate = tglVal;
+      state.settings.saldoTitikNol    = nilaiVal;
+      await save('settings');
+      alert('✓ Titik nol saldo disimpan');
+      render();
+    };
+
     document.getElementById('btn-reset').onclick = async () => {
       if (!confirm('Yakin hapus SEMUA data LOKAL?\n\nData di Google Sheet TIDAK ikut terhapus.')) return;
       if (!confirm('Konfirmasi lagi: HAPUS DATA LOKAL?')) return;
