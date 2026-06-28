@@ -405,6 +405,7 @@
     saldoAwal: 0,
     saldoTitikNol: 2554500,       // saldo terverifikasi pada tanggal titik nol
     saldoTitikNolDate: '2026-04-24', // tanggal titik nol saldo
+    piutangPraTitikNol: 5920000      // piutang sebelum titik nol (misal Pak Heru)
     appsScriptUrl: '',  // URL ke Google Apps Script web app
     autoSync: true,      // auto sync setelah setiap perubahan
     tarifHistory: [
@@ -718,13 +719,14 @@
     return nilaiTitikNol + paidIncome - expense;
   }
 
-  // Proyeksi: saldo kas + piutang belum bayar (hanya Pak Heru dll sejak titik nol)
+  // Proyeksi: saldo kas + piutang sejak titik nol + piutang pra-titik nol (manual)
   function getSaldoProyeksi(upToDate) {
-    const titikNol = state.settings.saldoTitikNolDate || '2026-04-24';
-    const piutang  = state.trips
+    const titikNol        = state.settings.saldoTitikNolDate || '2026-04-24';
+    const piutangPost     = state.trips
       .filter(t => !t.paid && t.date >= titikNol && t.date <= upToDate)
       .reduce((s, t) => s + (t.fare || 0), 0);
-    return getSaldoKumulatif(upToDate) + piutang;
+    const piutangPre      = state.settings.piutangPraTitikNol || 0;
+    return getSaldoKumulatif(upToDate) + piutangPost + piutangPre;
   }
 
   // Ambil Jumat dari minggu ISO (Senin–Jumat)
@@ -1089,13 +1091,15 @@
   }
 
   function renderWeeklySaldoTable() {
-    const weeks      = getWeeklyRows(10);
-    const today      = todayISO();
-    const titikNol   = state.settings.saldoTitikNolDate || '2026-04-24';
+    const weeks         = getWeeklyRows(10);
+    const today         = todayISO();
+    const titikNol      = state.settings.saldoTitikNolDate || '2026-04-24';
     const nilaiTitikNol = state.settings.saldoTitikNol || 0;
-    const saldoNow   = getSaldoKumulatif(today);
-    const proyeksiNow = getSaldoProyeksi(today);
-    const totalPiutang = state.trips.filter(t => !t.paid && t.date >= titikNol).reduce((s,t) => s + (t.fare||0), 0);
+    const saldoNow      = getSaldoKumulatif(today);
+    const proyeksiNow   = getSaldoProyeksi(today);
+    const piutangPost   = state.trips.filter(t => !t.paid && t.date >= titikNol).reduce((s,t) => s + (t.fare||0), 0);
+    const piutangPre    = state.settings.piutangPraTitikNol || 0;
+    const totalPiutang  = piutangPost + piutangPre;
 
     if (weeks.length === 0) return '';
 
@@ -1110,14 +1114,21 @@
           <div class="stat-card" style="background:var(--brand-soft);border-color:#c5e4d6">
             <div class="stat-label" style="color:var(--brand-dark)">Saldo kas sekarang</div>
             <div class="stat-value ${saldoNow >= 0 ? 'stat-positive' : 'stat-negative'}" style="color:var(--brand-dark)">${fmtRp(saldoNow)}</div>
-            <div class="stat-sub" style="color:var(--brand)">Uang masuk dikurangi semua ops</div>
+            <div class="stat-sub" style="color:var(--brand)">Titik nol + kas masuk − pengeluaran</div>
           </div>
           <div class="stat-card" style="background:var(--blue-soft);border-color:#b8d6ed">
             <div class="stat-label" style="color:var(--blue)">Proyeksi jika semua lunas</div>
             <div class="stat-value" style="color:var(--blue)">${fmtRp(proyeksiNow)}</div>
-            <div class="stat-sub" style="color:var(--blue)">+piutang Rp ${fmtRp(totalPiutang)}</div>
+            <div class="stat-sub" style="color:var(--blue)">+piutang total ${fmtRp(totalPiutang)}</div>
           </div>
         </div>
+
+        ${piutangPre > 0 ? `
+        <div style="background:var(--amber-soft);border:1px solid #f0d4a3;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px">
+          <span style="color:var(--amber);font-weight:600">⚠️ Piutang pra-titik nol: ${fmtRp(piutangPre)}</span>
+          <span style="color:var(--ink-mute);margin-left:8px">· hutang sebelum ${fmtDate(titikNol)} (tidak masuk saldo kas, hanya proyeksi)</span>
+        </div>
+        ` : ''}
 
         <div style="font-size:12px;font-weight:600;color:var(--ink-soft);margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">
           Rincian per minggu (Senin–Jumat)
@@ -2364,6 +2375,11 @@
             <label>Nilai saldo titik nol (Rp)</label>
             <input type="number" id="s-titik-nol-nilai" value="${s.saldoTitikNol || 0}">
           </div>
+          <div class="form-field">
+            <label>Piutang pra-titik nol (Rp)</label>
+            <input type="number" id="s-piutang-pre" value="${s.piutangPraTitikNol || 0}">
+            <div style="font-size:11px;color:var(--ink-mute);margin-top:4px">Hutang dosen sebelum titik nol (misal Pak Heru). Masuk proyeksi, tidak masuk saldo kas.</div>
+          </div>
         </div>
         <button class="btn btn-primary" id="btn-save-titik-nol">Simpan titik nol</button>
       </div>
@@ -2472,11 +2488,13 @@
       };
     });
     document.getElementById('btn-save-titik-nol').onclick = async () => {
-      const tglVal  = document.getElementById('s-titik-nol-date').value;
-      const nilaiVal = parseFloat(document.getElementById('s-titik-nol-nilai').value) || 0;
+      const tglVal      = document.getElementById('s-titik-nol-date').value;
+      const nilaiVal    = parseFloat(document.getElementById('s-titik-nol-nilai').value) || 0;
+      const piutangPreVal = parseFloat(document.getElementById('s-piutang-pre').value) || 0;
       if (!tglVal) { alert('Tanggal titik nol harus diisi'); return; }
-      state.settings.saldoTitikNolDate = tglVal;
-      state.settings.saldoTitikNol    = nilaiVal;
+      state.settings.saldoTitikNolDate    = tglVal;
+      state.settings.saldoTitikNol        = nilaiVal;
+      state.settings.piutangPraTitikNol   = piutangPreVal;
       await save('settings');
       alert('✓ Titik nol saldo disimpan');
       render();
