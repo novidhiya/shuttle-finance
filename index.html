@@ -395,16 +395,38 @@
 
   // ===== Default tarif & settings =====
   const DEFAULT_SETTINGS = {
-    tarifPP: 180000,
-    tarifSekali: 100000,
-    tarifCancel: 100000,
-    sewaHarian: 1500000,
+    tarifPP: 190000,
+    tarifSekali: 110000,
+    tarifCancel: 110000,
+    sewaHarian: 1600000,
     adminHarian: 150000,
     routeName: 'Bandung (ITB) ↔ Cikarang (ITSB)',
     saldo: 0,
     saldoAwal: 0,
     appsScriptUrl: '',  // URL ke Google Apps Script web app
-    autoSync: true       // auto sync setelah setiap perubahan
+    autoSync: true,      // auto sync setelah setiap perubahan
+    tarifHistory: [
+      {
+        id: 'tarif-v1',
+        label: 'Tarif Awal',
+        effectiveDate: '2025-01-01',
+        tarifPP: 180000,
+        tarifSekali: 100000,
+        tarifCancel: 100000,
+        sewaHarian: 1500000,
+        adminHarian: 150000
+      },
+      {
+        id: 'tarif-v2',
+        label: 'Tarif per 22 Juni 2026',
+        effectiveDate: '2026-06-22',
+        tarifPP: 190000,
+        tarifSekali: 110000,
+        tarifCancel: 110000,
+        sewaHarian: 1600000,
+        adminHarian: 150000
+      }
+    ]
   };
 
   // ===== State =====
@@ -440,6 +462,10 @@
     }
     // merge settings dengan default
     state.settings = { ...DEFAULT_SETTINGS, ...state.settings };
+    // Jika localStorage belum punya tarifHistory, pakai dari DEFAULT_SETTINGS
+    if (!state.settings.tarifHistory || state.settings.tarifHistory.length === 0) {
+      state.settings.tarifHistory = DEFAULT_SETTINGS.tarifHistory;
+    }
   }
   async function save(key) {
     try {
@@ -633,6 +659,32 @@
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
   );
 
+  // ===== Tarif History =====
+  function getTarifForDate(dateStr) {
+    const history = (state.settings.tarifHistory || []);
+    // urutkan descending berdasarkan effectiveDate, ambil yang pertama <= dateStr
+    const sorted = [...history].sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate));
+    const match = sorted.find(t => dateStr >= t.effectiveDate);
+    if (match) return match;
+    // fallback ke settings aktif kalau history kosong / tidak ada yang cocok
+    return {
+      tarifPP: state.settings.tarifPP,
+      tarifSekali: state.settings.tarifSekali,
+      tarifCancel: state.settings.tarifCancel,
+      sewaHarian: state.settings.sewaHarian,
+      adminHarian: state.settings.adminHarian
+    };
+  }
+
+  // helper: tanggal hari ini sebagai string ISO tanpa konversi UTC
+  function todayISO() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
   // ===== Parser =====
   function normalizeName(raw) {
     return String(raw || '')
@@ -699,16 +751,22 @@
     const m1 = rawText.match(/(\d{1,2})\s+(januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember)\s+(\d{4})/i);
     if (m1) {
       const months = { januari:0, februari:1, maret:2, april:3, mei:4, juni:5, juli:6, agustus:7, september:8, oktober:9, november:10, desember:11 };
-      const d = new Date(parseInt(m1[3]), months[m1[2].toLowerCase()], parseInt(m1[1]));
-      date = d.toISOString().slice(0, 10);
+      // FIX: format string langsung, jangan pakai toISOString() yang konversi ke UTC
+      const y = parseInt(m1[3]);
+      const mo = months[m1[2].toLowerCase()] + 1; // +1 karena months 0-indexed
+      const d = parseInt(m1[1]);
+      date = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     } else {
       const m2 = rawText.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
       if (m2) {
-        const d = new Date(parseInt(m2[3]), parseInt(m2[2]) - 1, parseInt(m2[1]));
-        date = d.toISOString().slice(0, 10);
+        // FIX: format string langsung, format DD/MM/YYYY
+        const y = parseInt(m2[3]);
+        const mo = parseInt(m2[2]);
+        const d = parseInt(m2[1]);
+        date = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       }
     }
-    if (!date) date = new Date().toISOString().slice(0, 10);
+    if (!date) date = todayISO(); // FIX: pakai todayISO() bukan new Date().toISOString()
 
     const items = [];
     lines.forEach(line => {
@@ -724,10 +782,12 @@
       const official = lookupOfficialName(normalized);
       const finalName = official || cleanedName.replace(/\b\w/g, c => c.toUpperCase());
 
+      // Tarif sesuai tanggal trip, bukan tarif aktif saat ini
+      const t = getTarifForDate(date);
       const tarif = {
-        PP: state.settings.tarifPP,
-        SEKALI: state.settings.tarifSekali,
-        CANCEL: state.settings.tarifCancel
+        PP: t.tarifPP,
+        SEKALI: t.tarifSekali,
+        CANCEL: t.tarifCancel
       }[status];
 
       // warning kalau nama ga match master & ada master names
@@ -1114,9 +1174,10 @@
       render();
     };
     document.getElementById('btn-add-row').onclick = () => {
+      const t = getTarifForDate(date);
       state.pendingParse.items.push({
         id: uid(), date, rawText: '', name: '', status: 'PP',
-        point: 'Default', fare: state.settings.tarifPP, paid: false, paidDate: '', warn: false
+        point: 'Default', fare: t.tarifPP, paid: false, paidDate: '', warn: false
       });
       renderPreview();
     };
@@ -1301,14 +1362,15 @@
 
   // ===== Operasi Harian =====
   function renderOperasi(p) {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayISO();
+    const todayTarif = getTarifForDate(today);
     const sortedOps = [...state.operations].sort((a, b) => b.date.localeCompare(a.date));
 
     p.innerHTML = `
       <div class="card">
         <h3 class="section-title">Catat hari operasi baru</h3>
         <div class="alert alert-info">
-          💡 Catat sekali per hari operasi. Nilai default diambil dari Pengaturan.
+          💡 Catat sekali per hari operasi. Nilai default menyesuaikan tarif yang berlaku pada tanggal dipilih.
         </div>
         <div class="form-grid">
           <div class="form-field">
@@ -1317,11 +1379,11 @@
           </div>
           <div class="form-field">
             <label>Sewa unit (Rp)</label>
-            <input type="number" id="o-sewa" value="${state.settings.sewaHarian}">
+            <input type="number" id="o-sewa" value="${todayTarif.sewaHarian}">
           </div>
           <div class="form-field">
             <label>Honor admin (Rp)</label>
-            <input type="number" id="o-admin" value="${state.settings.adminHarian}">
+            <input type="number" id="o-admin" value="${todayTarif.adminHarian}">
           </div>
           <div class="form-field">
             <label>Biaya lain (Rp)</label>
@@ -1384,6 +1446,12 @@
       state.operations.push(op);
       await save('operations');
       renderPanel();
+    };
+    // Auto-update default sewa/admin saat tanggal berubah
+    document.getElementById('o-date').onchange = (e) => {
+      const t = getTarifForDate(e.target.value);
+      document.getElementById('o-sewa').value = t.sewaHarian;
+      document.getElementById('o-admin').value = t.adminHarian;
     };
     p.querySelectorAll('[data-edit-op]').forEach(b => {
       b.onclick = () => {
@@ -1958,31 +2026,93 @@
       </div>
 
       <div class="card">
-        <h3 class="section-title">Tarif & biaya operasional</h3>
+        <h3 class="section-title">📋 Riwayat Tarif</h3>
+        <div style="font-size:12px;color:var(--ink-soft);margin-bottom:14px">
+          Tarif diterapkan berdasarkan tanggal berlaku. Saat input WA atau operasi harian, tarif yang digunakan
+          otomatis menyesuaikan tanggal trip/operasi.
+        </div>
+
+        ${(state.settings.tarifHistory || []).length === 0 ? `
+          <div class="empty-state"><div class="empty-state-icon">📋</div>Belum ada riwayat tarif</div>
+        ` : `
+          <div style="overflow-x:auto;margin-bottom:16px">
+            <table>
+              <thead>
+                <tr>
+                  <th>Berlaku sejak</th>
+                  <th>Label</th>
+                  <th style="text-align:right">PP</th>
+                  <th style="text-align:right">Sekali</th>
+                  <th style="text-align:right">Cancel</th>
+                  <th style="text-align:right">Sewa/hari</th>
+                  <th style="text-align:right">Admin/hari</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${[...(state.settings.tarifHistory || [])].sort((a,b) => b.effectiveDate.localeCompare(a.effectiveDate)).map(th => `
+                  <tr>
+                    <td><strong>${fmtDate(th.effectiveDate)}</strong></td>
+                    <td style="font-size:12px;color:var(--ink-soft)">${escapeHtml(th.label || '–')}</td>
+                    <td style="text-align:right" class="num">${fmtRp(th.tarifPP)}</td>
+                    <td style="text-align:right" class="num">${fmtRp(th.tarifSekali)}</td>
+                    <td style="text-align:right" class="num">${fmtRp(th.tarifCancel)}</td>
+                    <td style="text-align:right" class="num">${fmtRp(th.sewaHarian)}</td>
+                    <td style="text-align:right" class="num">${fmtRp(th.adminHarian)}</td>
+                    <td style="text-align:right">
+                      <button class="btn btn-sm btn-danger" data-del-tarif="${th.id}">×</button>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `}
+
+        <details style="margin-top:4px">
+          <summary style="cursor:pointer;font-size:13px;font-weight:500;color:var(--brand);padding:6px 0">+ Tambah tarif baru</summary>
+          <div style="margin-top:12px;padding:14px;background:var(--paper);border-radius:8px;border:1px solid var(--line)">
+            <div class="form-grid" style="margin-bottom:12px">
+              <div class="form-field">
+                <label>Berlaku sejak</label>
+                <input type="date" id="th-date">
+              </div>
+              <div class="form-field">
+                <label>Label (opsional)</label>
+                <input type="text" id="th-label" placeholder="misal: Tarif per Juli 2026">
+              </div>
+              <div class="form-field">
+                <label>Tarif PP (Rp)</label>
+                <input type="number" id="th-pp" value="${state.settings.tarifPP}">
+              </div>
+              <div class="form-field">
+                <label>Tarif Sekali Jalan (Rp)</label>
+                <input type="number" id="th-sekali" value="${state.settings.tarifSekali}">
+              </div>
+              <div class="form-field">
+                <label>Tarif Cancel (Rp)</label>
+                <input type="number" id="th-cancel" value="${state.settings.tarifCancel}">
+              </div>
+              <div class="form-field">
+                <label>Sewa harian (Rp)</label>
+                <input type="number" id="th-sewa" value="${state.settings.sewaHarian}">
+              </div>
+              <div class="form-field">
+                <label>Honor admin harian (Rp)</label>
+                <input type="number" id="th-admin" value="${state.settings.adminHarian}">
+              </div>
+            </div>
+            <button class="btn btn-primary" id="btn-add-tarif">+ Simpan tarif baru</button>
+          </div>
+        </details>
+      </div>
+
+      <div class="card">
+        <h3 class="section-title">Pengaturan umum</h3>
         <div class="form-grid">
           <div class="form-field">
             <label>Nama rute</label>
             <input type="text" id="s-route" value="${escapeHtml(s.routeName)}">
-          </div>
-          <div class="form-field">
-            <label>Tarif PP (Rp)</label>
-            <input type="number" id="s-pp" value="${s.tarifPP}">
-          </div>
-          <div class="form-field">
-            <label>Tarif Sekali Jalan (Rp)</label>
-            <input type="number" id="s-sekali" value="${s.tarifSekali}">
-          </div>
-          <div class="form-field">
-            <label>Tarif Cancel (Rp)</label>
-            <input type="number" id="s-cancel" value="${s.tarifCancel}">
-          </div>
-          <div class="form-field">
-            <label>Sewa harian (Rp)</label>
-            <input type="number" id="s-sewa" value="${s.sewaHarian}">
-          </div>
-          <div class="form-field">
-            <label>Honor admin harian (Rp)</label>
-            <input type="number" id="s-admin" value="${s.adminHarian}">
           </div>
           <div class="form-field">
             <label>Saldo awal (Rp)</label>
@@ -2046,17 +2176,55 @@
       state.settings = {
         ...state.settings,
         routeName: document.getElementById('s-route').value || s.routeName,
-        tarifPP: parseFloat(document.getElementById('s-pp').value) || 0,
-        tarifSekali: parseFloat(document.getElementById('s-sekali').value) || 0,
-        tarifCancel: parseFloat(document.getElementById('s-cancel').value) || 0,
-        sewaHarian: parseFloat(document.getElementById('s-sewa').value) || 0,
-        adminHarian: parseFloat(document.getElementById('s-admin').value) || 0,
         saldoAwal: parseFloat(document.getElementById('s-saldo').value) || 0
       };
       await save('settings');
       alert('✓ Pengaturan tersimpan');
       render();
     };
+
+    // Tambah entry tarif baru
+    const btnAddTarif = document.getElementById('btn-add-tarif');
+    if (btnAddTarif) btnAddTarif.onclick = async () => {
+      const effDate = document.getElementById('th-date').value;
+      if (!effDate) { alert('Tanggal berlaku harus diisi'); return; }
+      const newEntry = {
+        id: uid(),
+        label: document.getElementById('th-label').value.trim() || `Tarif per ${fmtDate(effDate)}`,
+        effectiveDate: effDate,
+        tarifPP:     parseFloat(document.getElementById('th-pp').value)     || 0,
+        tarifSekali: parseFloat(document.getElementById('th-sekali').value) || 0,
+        tarifCancel: parseFloat(document.getElementById('th-cancel').value) || 0,
+        sewaHarian:  parseFloat(document.getElementById('th-sewa').value)   || 0,
+        adminHarian: parseFloat(document.getElementById('th-admin').value)  || 0
+      };
+      if (!state.settings.tarifHistory) state.settings.tarifHistory = [];
+      state.settings.tarifHistory.push(newEntry);
+      // Update juga tarif "aktif" di settings ke entry terbaru
+      const sorted = [...state.settings.tarifHistory].sort((a,b) => b.effectiveDate.localeCompare(a.effectiveDate));
+      const latest = sorted[0];
+      state.settings.tarifPP     = latest.tarifPP;
+      state.settings.tarifSekali = latest.tarifSekali;
+      state.settings.tarifCancel = latest.tarifCancel;
+      state.settings.sewaHarian  = latest.sewaHarian;
+      state.settings.adminHarian = latest.adminHarian;
+      await save('settings');
+      alert('✓ Tarif baru ditambahkan');
+      renderPanel();
+    };
+
+    // Hapus entry tarif
+    p.querySelectorAll('[data-del-tarif]').forEach(b => {
+      b.onclick = async () => {
+        if ((state.settings.tarifHistory || []).length <= 1) {
+          alert('Minimal harus ada 1 entry tarif'); return;
+        }
+        if (!confirm('Hapus entry tarif ini?')) return;
+        state.settings.tarifHistory = state.settings.tarifHistory.filter(th => th.id !== b.dataset.delTarif);
+        await save('settings');
+        renderPanel();
+      };
+    });
     document.getElementById('btn-reset').onclick = async () => {
       if (!confirm('Yakin hapus SEMUA data LOKAL?\n\nData di Google Sheet TIDAK ikut terhapus.')) return;
       if (!confirm('Konfirmasi lagi: HAPUS DATA LOKAL?')) return;
